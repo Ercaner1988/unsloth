@@ -257,3 +257,6 @@ Speech_12dB_s16.flac
 
 # launch.py --outdir scratch from a local run
 /out/
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/
