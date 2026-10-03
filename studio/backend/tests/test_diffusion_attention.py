@@ -8,6 +8,7 @@ transformer that records / raises on ``set_attention_backend``.
 
 from __future__ import annotations
 
+import sys
 import types
 
 import pytest
@@ -368,6 +369,42 @@ def test_xformers_installs_the_cuda_matched_wheel_not_the_package_name(monkeypat
     assert len(run.calls) == 1
     assert _XFORMERS_WHEEL in run.calls[0]
     assert "xformers" not in [arg for arg in run.calls[0] if arg != _XFORMERS_WHEEL]
+
+
+def test_a_hidden_xformers_is_not_reinstalled_in_the_same_process(monkeypatch):
+    monkeypatch.setenv("UNSLOTH_DIFFUSION_ATTENTION_INSTALL", "auto")
+    monkeypatch.setitem(sys.modules, "xformers", None)
+
+    def _no_resolve():
+        raise AssertionError("resolved a wheel for a hidden xformers")
+
+    monkeypatch.setattr(att, "_xformers_wheel_target", _no_resolve)
+    run = _Recorder()
+    _stub_subprocess(monkeypatch, run)
+    logger = _CapturingLogger()
+
+    reason = att._ensure_attention_backend_installed("xformers", logger)
+
+    assert reason and "requires a different torch" in reason
+    assert run.calls == []
+    assert any("restart Studio" in line for line in logger.lines)
+
+
+def test_the_hidden_xformers_refusal_records_no_attempt(monkeypatch):
+    """Policy, not a failed attempt: once the entry is gone the same process may still install."""
+    monkeypatch.setenv("UNSLOTH_DIFFUSION_ATTENTION_INSTALL", "auto")
+    monkeypatch.setitem(sys.modules, "xformers", None)
+    att._ensure_attention_backend_installed("xformers")
+    monkeypatch.delitem(sys.modules, "xformers")
+
+    import importlib.util
+
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name: None)
+    _stub_xformers_wheel(monkeypatch)
+    run = _Recorder()
+    _stub_subprocess(monkeypatch, run)
+    att._ensure_attention_backend_installed("xformers")
+    assert len(run.calls) == 1
 
 
 _CREDENTIALED_WHEEL = (
@@ -845,6 +882,26 @@ def test_any_subquadratic_kernel_means_not_math_only(kernels, monkeypatch):
     # the score matrix is never materialised and there is nothing to warn about.
     _stub_probe(monkeypatch, kernels)
     assert att.sdpa_math_only(_target()) is False
+
+
+def test_a_fused_launch_that_fails_late_is_not_reported_available(monkeypatch):
+    # Windows ROCm gfx1151: the fused call returns, and its hipErrorInvalidValue only surfaces on
+    # the next checked kernel. The probe must take that error itself, not hand it to a later op.
+    torch = pytest.importorskip("torch")
+
+    class _Pending:
+        def float(self):
+            raise RuntimeError("CUDA error: invalid argument")
+
+    real = torch.nn.functional.scaled_dot_product_attention
+
+    def _sdpa(q, k, v, *a, **kw):
+        if not torch.backends.cuda.math_sdp_enabled():
+            return _Pending()
+        return real(q, k, v, *a, **kw)
+
+    monkeypatch.setattr(torch.nn.functional, "scaled_dot_product_attention", _sdpa)
+    assert att._probe_sdpa_kernels("cpu", torch.float32) == ("math",)
 
 
 def test_an_unanswerable_probe_is_not_a_math_only_verdict(monkeypatch):
