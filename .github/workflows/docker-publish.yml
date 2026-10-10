@@ -77,6 +77,8 @@ permissions:
 jobs:
   # Resolve every upstream ref ONCE, so both arch legs and Studio bake identical bits.
   prepare:
+    # Forks publish only when explicitly dispatched; upstream keeps its cadence.
+    if: ${{ github.repository == 'unslothai/unsloth' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -702,8 +704,8 @@ jobs:
   # Namespace-scoped route: the legacy /v2/repositories path rejects the organization
   # token. A dispatch with an overridden input keeps its handles, its only names.
   cleanup:
-    needs: [merge, merge-studio, hub-readme, smoke-test]
-    if: ${{ always() && (github.event_name != 'workflow_dispatch' || (github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && github.event.inputs.unsloth_ref == '' && (github.event.inputs.unsloth_zoo_ref == '' || github.event.inputs.unsloth_zoo_ref == 'main') && (github.event.inputs.notebooks_ref == '' || github.event.inputs.notebooks_ref == 'main') && github.event.inputs.llama_prebuilt_tag == '')) }}
+    needs: [prepare, merge, merge-studio, hub-readme, smoke-test]
+    if: ${{ always() && needs.prepare.result == 'success' && (github.event_name != 'workflow_dispatch' || (github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && github.event.inputs.unsloth_ref == '' && (github.event.inputs.unsloth_zoo_ref == '' || github.event.inputs.unsloth_zoo_ref == 'main') && (github.event.inputs.notebooks_ref == '' || github.event.inputs.notebooks_ref == 'main') && github.event.inputs.llama_prebuilt_tag == '')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
